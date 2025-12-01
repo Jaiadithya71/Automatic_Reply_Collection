@@ -1,24 +1,12 @@
-require("dotenv").config();
+// src/services/emailService.js
 const fs = require("fs");
 const csv = require("csv-parser");
 const nodemailer = require("nodemailer");
 
-const EMAIL_USER = process.env.EMAIL_USER;
-const EMAIL_PASS = process.env.EMAIL_PASS;
-
-// Configure the mail transporter
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS,
-  },
-});
-
 // Function to send one email
-async function sendMail(to, subject, text) {
+async function sendMail(transporter, to, subject, text, from) {
   const mailOptions = {
-    from: EMAIL_USER,
+    from: from,
     to,
     subject,
     text,
@@ -34,9 +22,41 @@ async function sendMail(to, subject, text) {
   }
 }
 
-// Read CSV and send emails (now returns a promise)
-function sendMailsFromCSV(csvPath, subject, body) {
+// Read CSV and send emails
+function sendMailsFromCSV(csvPath, subject, body, emailUser, emailPass) {
   return new Promise((resolve, reject) => {
+    // Debug logging
+    console.log('sendMailsFromCSV called with:', {
+      csvPath,
+      subject,
+      body: body.substring(0, 20) + '...',
+      emailUser: emailUser || 'UNDEFINED',
+      emailPass: emailPass ? '***SET***' : 'UNDEFINED'
+    });
+    
+    // Validate credentials
+    if (!emailUser || !emailPass) {
+      console.error('Validation failed - credentials missing');
+      return reject(new Error('Email credentials not configured. Please set EMAIL_USER and EMAIL_PASS in .env file'));
+    }
+
+    // Configure the mail transporter with TLS options to handle certificate issues
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: emailUser,
+        pass: emailPass,
+      },
+      tls: {
+        // Don't fail on invalid certificates
+        rejectUnauthorized: false
+      },
+      // Alternative: use direct SMTP configuration
+      // host: 'smtp.gmail.com',
+      // port: 587,
+      // secure: false, // use STARTTLS
+    });
+
     const recipients = [];
 
     fs.createReadStream(csvPath)
@@ -47,12 +67,18 @@ function sendMailsFromCSV(csvPath, subject, body) {
         }
       })
       .on("end", async () => {
+        if (recipients.length === 0) {
+          return reject(new Error('No email addresses found in CSV'));
+        }
+
         console.log(`Found ${recipients.length} emails in CSV`);
 
         const results = [];
         for (const email of recipients) {
-          const result = await sendMail(email, subject, body);
+          const result = await sendMail(transporter, email, subject, body, emailUser);
           results.push(result);
+          // Add a small delay between emails to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         const sent = results.filter(r => r.success).length;
@@ -74,4 +100,4 @@ function sendMailsFromCSV(csvPath, subject, body) {
   });
 }
 
-module.exports = { sendMail, sendMailsFromCSV };
+module.exports = { sendMailsFromCSV };
